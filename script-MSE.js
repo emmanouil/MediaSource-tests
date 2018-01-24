@@ -1,3 +1,4 @@
+'use strict'
 /*	This file does the initializing, generic playlist parsing and the MSE actions
  *	For coord-parsing and other function are in processor.js
  *
@@ -16,18 +17,14 @@ const PLAYLIST_UPDATE_RATE = 500;	//in ms
 var port = '8000';
 var playlist_dir = '../out/playlist.m3u8';
 var seg_url = 'http://localhost:' + port + '/x64/Debug/out/';
-var coord_url = 'http://localhost:' + port + '/';
 const DISABLE_AUDIO = true;
-const withReverb = false;
-const withModulation = true;
-const reverbFile = 'concert-crowd2.ogg';
 
 //vars
 var mime_codec = 'video/mp4; codecs="avc1.42c01e"';
 var mediaSource = new MediaSource();
+var sourceBuffer;
 var video, playlist, textTrack, cues;
 var playlistArray, playlistPosition = 0;
-var skeleton_worker = new Worker('skel_parser.js');
 var req_status = -10;
 var pl_timer_ID;
 var kill_all = false;
@@ -38,7 +35,6 @@ window.onload = function () {
 	mediaSource.video = video;
 	video.ms = mediaSource;
 	video.src = window.URL.createObjectURL(mediaSource);
-	if (withReverb) fetch(reverbFile, initReverb, "arraybuffer");
 	fetch_pl();
 	initMSE();
 }
@@ -46,7 +42,7 @@ window.onload = function () {
 //MSE-specific functions
 function initMSE() {
 	if (req_status == 200 && playlist.length > 0) {
-		if (mediaSource.readyState = "open") {
+		if (mediaSource.readyState == "open") {
 			onSourceOpen();
 		} else {
 			mediaSource.addEventListener("sourceopen", onSourceOpen);
@@ -107,19 +103,16 @@ function handleNextPlElement() {
 		//		sourceBuffer.addEventListener('updateend', handleNextPlElement);
 	} else {
 		//element = playlist.splice(1, 1).toString();
-		element = playlistArray[playlistPosition];
+		var element = playlistArray[playlistPosition];
 		playlistPosition++;
 		if (element.endsWith('.m4s')) { //we have a segment
 			fetch(element, appendNextMediaSegment, "arraybuffer");
 			if (video.paused)
 				start_video();
 		} else if (element.endsWith('.txt')) { //we have a coordinates file
-			fetch(coord_url + element, parse_CoordFile);
-			//moved to be triggered by message from the worker
-			//handleNextPlElement();
+			console.log("[WARNING] non-handled .txt element found - Check now!");
 		} else if (element.startsWith("T:")) { //we have a coordinate set file	DEPRICATED
 			console.log("[WARNING] Depricated format - Check now!");
-			handleCoordSet(element);
 		} else if (element.length < 2) {
 			console.log("possible blank line in playlist - ignoring");
 			handleNextPlElement();
@@ -212,70 +205,12 @@ function compare_playlist() {
 	}
 }
 
-function parse_CoordFile(coordCtx) {
-	coords_in = this.responseText.split(/\r\n|\r|\n/); //split on break-line
-	req_status = this.status;
-	handleCoordFile(coords_in);
-}
-
-function handleCoordFile(coors) {
-	skeleton_worker.postMessage({
-		type: 'coord_f',
-		data: coors
-	})
-}
-
 function start_video() {
 	console.log('play');
-	skeleton_worker.postMessage({
-		type: 'start',
-		data: video.currentTime
-	})
 	video.play();
 }
 
-//incoming msg from skeleton worker
-skeleton_worker.onmessage = function (e) {
-	var type = e.data.type;
-	var data = e.data.data;
-
-	if (typeof type === 'undefined') { //we have a (old) skeleton set
-		drawViz(e.data);
-		if (!DISABLE_AUDIO) {
-			do_the_audio(e.data);
-		} else {
-			is_playing = true;
-		}
-	} else if (type === 'skel_proj') {	//we have a projected coord
-		drawViz(e.data, 'proj');
-	} else if (type === 'skel_del') {
-		drawViz(e.data, 'del');
-	} else { //we have a proccessed
-		switch (type) {
-			case 'update':
-				/*
-					if(sourceBuffer.updating){
-						console.log("[WARNING] previous")
-						mediaSource.sourceBuffers[0].addEventListener('updateend', handleNextPlElement,{once: false});
-						return;
-					}
-				*/
-				handleNextPlElement();
-				break;
-			case 'stop':
-				kill_audio();
-				break;
-			default:
-				console.log("NOTE: unwanted, of type: " + type);
-		}
-	}
-}
-
 function killAll() {
-	skeleton_worker.postMessage({
-		type: 'kill',
-		data: video.currentTime
-	})
 	clearTimeout(pl_timer_ID);
 	kill_all = true;
 }
